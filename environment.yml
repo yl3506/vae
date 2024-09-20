@@ -1,0 +1,18 @@
+# create env: conda env create -f environment.yml
+# update env if packages change: conda env update -f environment.yml
+name: betavae
+channels:
+  - defaults
+  - pytorch
+  - conda-forge
+dependencies:
+  - python=3.8
+  - pip
+  - numpy
+  - matplotlib
+  - pytorch
+  - torchvision
+  # - cudatoolkit=11.3  # Adjust this version based on your CUDA version, if using GPU
+  - opencv=4.5.5  # Specifying a version known to work well
+  - pip:
+    - opencv-python==4.5.5.64  # Ensuring pip and conda versions match
