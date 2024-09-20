@@ -381,7 +381,9 @@ class BalancedLoss:
 def main():
 
     # Hyperparameters
-    root_dir = "/Users/yichen/Downloads/vae/"
+    # get current directory
+    root_dir = os.getcwd() + "/"
+    print(f"Current directory: {root_dir}")
     video_dir = root_dir + "data/"
     resume_from_pkl = f"{root_dir}logs/20240821-161859/checkpoints/best_model.pkl" 
     # resume_from_pkl = None
