@@ -1,7 +1,5 @@
 import torch
 import torch.nn as nn
-import torch.optim as optim
-from tqdm import tqdm
 
 
 class ConvLSTM(nn.Module):
@@ -105,30 +103,6 @@ class EnhancedConvBetaVAE(nn.Module):
             nn.Sigmoid()
         )
 
-        # # obj segmentation
-        # self.obj_segmentation = nn.Sequential(
-        #     nn.Conv2d(input_channels, 8, kernel_size=4, stride=2, padding=1),
-        #     nn.ReLU(),
-        #     nn.Conv2d(8, 16, kernel_size=4, stride=2, padding=1),
-        #     nn.ReLU(),
-        #     nn.Conv2d(16, 32, kernel_size=4, stride=2, padding=1),
-        #     nn.ReLU(),
-        #     nn.Conv2d(32, 16, kernel_size=4, stride=2, padding=1),
-        #     nn.ReLU(),
-        #     nn.Conv2d(16, 8, kernel_size=4, stride=2, padding=1),  
-        #     nn.ReLU()
-        # )
-        # # Calculate the flattened size of the segmentation output
-        # with torch.no_grad():
-        #     sample_input = torch.zeros(1, input_channels, self.frame_height, self.frame_width)  
-        #     sample_output = self.obj_segmentation(sample_input)
-        #     self.seg_flattened_size = sample_output.numel() // sample_output.size(0)  # Divide by batch size
-        # # Fully connected layer for segmentation mask
-        # self.seg_fc = nn.Sequential(
-        #     nn.Linear(self.seg_flattened_size, self.frame_height * self.frame_width),
-        #     nn.Sigmoid()  # Ensure output is between 0 and 1
-        # )
-
         
     def init_hidden(self, batch_size, spatial_size):
         height, width = spatial_size
@@ -136,18 +110,26 @@ class EnhancedConvBetaVAE(nn.Module):
                 torch.zeros(batch_size, self.base_conv_size*(2**4), height, width))
     
     def encode(self, frames, flows):
-        batch_size = frames.size(0)
+        batch_size = frames.size(0) # [batch_size, seq_len, channels, height, width]
+        seq_len = frames.size(1)
+        
+        # Initial hidden state
         frame_features = self.frame_encoder(frames[:, 0])
         flow_features = self.flow_encoder(flows[:, 0])
         combined_features = torch.cat([frame_features, flow_features], dim=1)
         h, c = self.init_hidden(batch_size, combined_features.shape[2:])
-        for t in range(self.sequence_length - 1):
+        h, c = self.conv_lstm(combined_features, (h, c))
+        
+        # Loop over the rest of the sequence
+        for t in range(1, seq_len - 1):
             frame_features = self.frame_encoder(frames[:, t])
             flow_features = self.flow_encoder(flows[:, t])
             combined_features = torch.cat([frame_features, flow_features], dim=1)
             h, c = self.conv_lstm(combined_features, (h, c))
+        
         h_flat = h.view(h.size(0), -1)
         return self.fc_mu(h_flat), self.fc_logvar(h_flat)
+
     
     def reparameterize(self, mu, logvar):
         std = torch.exp(0.5 * logvar)
@@ -165,11 +147,4 @@ class EnhancedConvBetaVAE(nn.Module):
         mu, logvar = self.encode(frames, flows)
         z = self.reparameterize(mu, logvar)
         recon_x = self.decode(z)
-        # # Generate segmentation mask
-        # segmentation_features = self.obj_segmentation(frames[:, -1])
-        # segmentation_features_flat = segmentation_features.view(segmentation_features.size(0), -1)
-        # segmentation_mask = self.seg_fc(segmentation_features_flat)
-        # segmentation_mask = segmentation_mask.view(-1, 1, self.frame_height, self.frame_width)
-        # return recon_x, mu, logvar, segmentation_mask
         return recon_x, mu, logvar
-

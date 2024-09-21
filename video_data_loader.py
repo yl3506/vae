@@ -40,52 +40,64 @@ class MemoryEfficientVideoDataset(Dataset):
             cap = cv2.VideoCapture(video_path)
             frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
             cap.release()
-            for i in range(0, frame_count - self.skip_frames * self.sequence_length, self.skip_frames):
-                if i + self.skip_frames * (self.sequence_length - 1) < frame_count:
-                    frame_indices.append((video_idx, i))
+            max_t = frame_count - self.skip_frames  # Ensure target frame exists
+            for t in range((self.sequence_length - 1) * self.skip_frames, max_t):
+                frame_indices.append((video_idx, t))
         return frame_indices
+
     
     def __len__(self):
         return len(self.frame_indices)
     
+
     def __getitem__(self, idx):
-        '''
-        Now loads and processes frames on-demand when requested. 
-        This means that only the frames needed for the current batch are loaded into memory.
-        Optical flow is computed on-the-fly for each batch, 
-        which can be more memory-efficient but might be slightly slower during training.
-        '''
-        video_idx, start_frame = self.frame_indices[idx]
+        video_idx, end_frame = self.frame_indices[idx]
         video_path = self.video_paths[video_idx]
         
-        frames = []
-        flows = []
+        # Calculate the time steps for input frames
+        frame_times = [end_frame - i * self.skip_frames for i in reversed(range(self.sequence_length))]
         
+        frames = []
         cap = cv2.VideoCapture(video_path)
         try:
-            for i in range(self.sequence_length):
-                cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame + i * self.skip_frames)
+            # Load input frames at specified times
+            for ft in frame_times:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, ft)
                 ret, frame = cap.read()
                 if not ret:
-                    raise ValueError(f"Could not read frame {start_frame + i * self.skip_frames} from {video_path}")
-                
+                    raise ValueError(f"Could not read frame {ft} from {video_path}")
                 frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 frame = self.transform(frame)
                 frames.append(frame)
-                
-                if i > 0:
-                    prev_frame = cv2.cvtColor(frames[-2].permute(1, 2, 0).numpy(), cv2.COLOR_RGB2GRAY)
-                    curr_frame = cv2.cvtColor(frames[-1].permute(1, 2, 0).numpy(), cv2.COLOR_RGB2GRAY)
-                    flow = cv2.calcOpticalFlowFarneback(prev_frame, curr_frame, None, 0.5, 3, 15, 3, 5, 1.2, 0)
-                    flow = torch.from_numpy(flow.transpose(2, 0, 1)).float()
-                    flows.append(flow)
+            
+            # Load target frame at time t + skip_frames
+            target_frame_idx = end_frame + self.skip_frames
+            cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame_idx)
+            ret, target_frame = cap.read()
+            if not ret:
+                raise ValueError(f"Could not read target frame {target_frame_idx} from {video_path}")
+            target_frame = cv2.cvtColor(target_frame, cv2.COLOR_BGR2RGB)
+            target_frame = self.transform(target_frame)
         finally:
             cap.release()
         
-        frames_tensor = torch.stack(frames)
-        flows_tensor = torch.stack(flows)
+        # Compute flows between consecutive input frames
+        flows = []
+        for i in range(len(frames) - 1):
+            prev_frame = frames[i]
+            next_frame = frames[i + 1]
+            prev_frame_gray = cv2.cvtColor(prev_frame.permute(1, 2, 0).numpy(), cv2.COLOR_RGB2GRAY)
+            next_frame_gray = cv2.cvtColor(next_frame.permute(1, 2, 0).numpy(), cv2.COLOR_RGB2GRAY)
+            flow = cv2.calcOpticalFlowFarneback(prev_frame_gray, next_frame_gray, None,
+                                                0.5, 3, 15, 3, 5, 1.2, 0)
+            flow = torch.from_numpy(flow.transpose(2, 0, 1)).float()
+            flows.append(flow)
         
-        return frames_tensor[:-1], flows_tensor, frames_tensor[-1]
+        # Convert lists to tensors
+        frames_tensor = torch.stack(frames)        # Shape: (sequence_length, C, H, W)
+        flows_tensor = torch.stack(flows)          # Shape: (sequence_length - 1, 2, H, W)
+        
+        return frames_tensor, flows_tensor, target_frame
 
 
 class MemoryEfficientDataLoader(DataLoader):
@@ -95,9 +107,11 @@ class MemoryEfficientDataLoader(DataLoader):
 
     @staticmethod
     def _collate_fn(batch):
-        # a custom function to properly stack the batch items
         frames, flows, targets = zip(*batch)
-        return torch.stack(frames), torch.stack(flows), torch.stack(targets)
+        frames = torch.stack(frames)
+        flows = torch.stack(flows)
+        targets = torch.stack(targets)
+        return frames, flows, targets
 
     def __del__(self):
         # Ensure that the workers are shut down properly
@@ -118,3 +132,26 @@ def load_video_data(video_paths, batch_size, sequence_length, target_size, skip_
     finally:
         del dataloader  # This will trigger the __del__ method, ensuring proper cleanup
 
+
+
+if __name__ == "__main__":
+    
+    video_paths = ["data/bounce 1-1.mkv", "data/fall 1-4.mkv"]
+    batch_size = 2
+    sequence_length = 5
+    target_size = (144, 256)
+    skip_frames = 1
+    num_workers = 1
+    
+    dataset = MemoryEfficientVideoDataset(video_paths, sequence_length, target_size, skip_frames)
+    frames_tensor, flows_tensor, target_frame = dataset[0]
+
+    print("Input Frames Shape:", frames_tensor.shape)        # Should be (sequence_length, C, H, W)
+    print("Flows Shape:", flows_tensor.shape)                # Should be (sequence_length - 1, 2, H, W)
+    print("Target Frame Shape:", target_frame.shape)         # Should be (C, H, W)
+    
+
+    with load_video_data(video_paths, batch_size, sequence_length, target_size, skip_frames, num_workers) as dataloader:
+        for frames, flows, targets in dataloader:
+            print(frames.shape, flows.shape, targets.shape)
+            break
