@@ -130,7 +130,16 @@ class EnhancedConvBetaVAE(nn.Module):
         h_flat = h.view(h.size(0), -1)
         return self.fc_mu(h_flat), self.fc_logvar(h_flat)
 
-    
+        
+    def encode(self, frame, flow):
+        frame_features = self.frame_encoder(frame)
+        flow_features = self.flow_encoder(flow)
+        combined_features = torch.cat([frame_features, flow_features], dim=1)
+        h = combined_features.view(combined_features.size(0), -1)
+        mu = self.fc_mu(h)
+        logvar = self.fc_logvar(h)
+        return mu, logvar
+
     def reparameterize(self, mu, logvar):
         std = torch.exp(0.5 * logvar)
         eps = torch.randn_like(std)

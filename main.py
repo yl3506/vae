@@ -49,11 +49,11 @@ def train():
                 
                 recon_loss = F.mse_loss(recon_frame, target_frame, reduction='mean')
                 kl_div = utils.kl_divergence(mu, logvar)
-                orig_frame = frames[:, -1]  # Frame at time t
+                orig_frame = frames[:, -1]  # orig frame t=sequence_length-1, target frame t=sequence_length
                 motion_loss = utils.emphasized_motion_loss(recon_frame, orig_frame, target_frame, emphasis=1)
 
                 total_loss = recon_loss + beta * kl_div + motion_weight * motion_loss_scale * motion_loss
-
+                
                 if torch.isnan(total_loss):
                     print(f"NaN loss detected at batch {batch_idx}. Skipping update.")
                     continue
@@ -92,7 +92,7 @@ def train():
         # outside dataloader context, space freed
         is_best = epoch_losses['total'] < best_loss
         best_loss = min(epoch_losses['total'], best_loss)
-        if (epoch + 0) % save_frequency == 0 or is_best:
+        if (epoch + 0) % save_frequency == 0 or is_best or (epoch == start_epoch + num_epochs - 1):
             # Save checkpoint with retry mechanism
             for retry in range(max_retries):
                 try:
@@ -141,7 +141,7 @@ if __name__ == "__main__":
     root_dir = os.getcwd() + "/"
     print(f"Current directory: {root_dir}")
     video_dir = root_dir + "data/"
-    resume_from_checkpoint = f"{root_dir}logs/20240821-161859/checkpoints/best_model.pkl" 
+    # resume_from_checkpoint = f"{root_dir}logs/20240821-161859/checkpoints/best_model.pkl" 
     resume_from_checkpoint = None
     target_size = (144, 256) # size of video frame (h, w)
     skip_frames = 3 # interval of frame prediction
@@ -150,8 +150,8 @@ if __name__ == "__main__":
     num_videos_in_epoch = 10 # number of sample videos in epoch
     num_epochs = 100
     num_workers = 2
-    log_frequency = 5 # plot results every x epochs
-    save_frequency = 20  # save model every x epochs
+    log_frequency = 10 # plot results every x epochs
+    save_frequency = 100  # save model every x epochs
     max_retries = 3 # number of retries of checkpoint saving
 
     latent_dim = 256 # for fc between encoder and decoder
